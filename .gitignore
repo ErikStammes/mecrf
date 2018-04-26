@@ -4,5 +4,6 @@
 /include
 /man
 /__pycache__
+/data
 *.pyc
 pip-selfcheck.json

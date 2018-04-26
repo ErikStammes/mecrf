@@ -1,7 +1,8 @@
 from __future__ import absolute_import
 from __future__ import print_function
 
-import os, sys
+import os
+import sys
 import operator
 
 from data_utils_ner import *
@@ -44,7 +45,7 @@ def get_ner_dict(data):
     ner2idx = {}
     for document in data:
         for sentence in document:
-            for _, _, _, _, ner in sentence: ##FEATURES
+            for _, ner, _ in sentence:
                 if ner not in ner2idx:
                     ner2idx[ner] = len(ner2idx)
     return ner2idx
@@ -76,7 +77,7 @@ def load_embeddings(data, in_file, binary=False):
     ret_word2idx = {}
     for document in data:
         for sentence in document:
-            for word, _, _, _, _ in sentence: ##FEATURES
+            for word, _, _ in sentence:
                 if word.lower() in emb:
                     if word not in ret_word2idx:
                         ret_word2idx[word] = len(ret_emb)
@@ -91,7 +92,7 @@ def output_conll(Gold, Pred, out_F):
         for gold, pred in zip(Gold, Pred):
             assert len(gold) == len(pred)
             for g, p in zip(gold, pred):
-                f.write(' '.join([g[0], g[-1], p]))
+                f.write(' '.join([g[0], g[1], p]))
                 f.write('\n')
             f.write('\n')
 
@@ -131,23 +132,25 @@ if __name__ == "__main__":
     logger.info(" ".join(sys.argv))
 
     train = load_task(
-        os.path.join(FLAGS.data_dir, 'eng.train'), 
-        BIO=False, SBIEO=False,
+        os.path.join(FLAGS.data_dir, 'train-50.json'), 
+        POS=True
     )
     train_flattened = [s for d in train for s in d]
     val = load_task(
-        os.path.join(FLAGS.data_dir, 'eng.testa'), 
-        BIO=False, SBIEO=False,
+        os.path.join(FLAGS.data_dir, 'dev.json'), 
+        POS=True
     )
     val_flattened = [s for d in val for s in d]
     test = load_task(
-        os.path.join(FLAGS.data_dir, 'eng.testb'), 
-        BIO=False, SBIEO=False,
+        os.path.join(FLAGS.data_dir, 'test.json'), 
+        POS=True
     )
     test_flattened = [s for d in test for s in d]
     
     data = train + val + test
     data = np.asarray(data, dtype=np.object)
+
+    logger.info("Loaded data")
     
     assert FLAGS.embedding_file is not None
     embedding_mat, word2idx = load_embeddings(
@@ -157,7 +160,7 @@ if __name__ == "__main__":
     idx2word = dict(zip(word2idx.values(), word2idx.keys()))
     FLAGS.embedding_size = embedding_mat.shape[1]
     
-    logger.info('embedding_mat size: ' + str(embedding_mat.shape))
+    logger.info('Embedding_mat size: ' + str(embedding_mat.shape))
 
     np.random.seed(FLAGS.random_state)
     

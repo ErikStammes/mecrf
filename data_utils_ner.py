@@ -1,103 +1,64 @@
 from __future__ import absolute_import
+from __future__ import division
+
+from itertools import chain
 
 import os
 import re
 import string
+import json
 import numpy as np
+import spacy
 
-from itertools import chain
-
-def load_task(in_file, BIO=False, SBIEO=False):
-    data = get_stories(in_file, BIO=BIO, SBIEO=SBIEO)
+def load_task(in_file, POS=False):
+    with open(in_file) as f:
+        return parse_conversations(f.read(), POS=POS)
     return data
 
-def tokenize(sent):
-    return sent.split(' ')
+def extract_tags_from_slots(utterance):
+    tags_list = ['O'] * len(utterance['tokens'])
+    if 'slots' not in utterance:
+        return tags_list
+    for slot in utterance['slots']:
+        start, end = slot['start'], slot['exclusive_end']
+        tags_list[start] = 'B-'+slot['slot']
+        for i in range(1, end-start):
+            tags_list[start+i] = 'I-'+slot['slot']
+    return tags_list
 
-def convert2BIO(data):
-    for document in data:
-        for sentence in document:
-            for i, (word, pos, chunk, ner) in enumerate(sentence):
-                is_first = i == 0
-                is_last = i == len(sentence) - 1
-                t = ner[2:]
-                if ner[:2] == 'I-':
-                    if is_first or sentence[i - 1][3] == 'O':
-                        sentence[i] = ((word, pos, chunk, 'B-' + ner[2:]))
-                    else:
-                        if sentence[i - 1][3][2:] != ner[2:]:
-                            sentence[i] = ((word, pos, chunk, 'B-' + ner[2:]))
-    return data
-
-def convert2SBIEO(data):
-    data = convert2BIO(data)
-    for document in data:
-        for sentence in document:
-            for i, (word, pos, chunk, ner) in enumerate(sentence):
-                is_first = i == 0
-                is_last = i == len(sentence) - 1
-                current_tag = ner[:2]
-                next_tag = '' if is_last else sentence[i + 1][3][:2]
-                new_tag = None
-                if current_tag == 'B-' and (next_tag in ['B-', 'O', '']):
-                    new_tag = 'S-' + ner[2:]
-                elif current_tag == 'I-' and (next_tag in ['B-', 'O', '']):
-                    new_tag = 'E-' + ner[2:]
-                else:
-                    new_tag = ner
-                sentence[i] = ((word, pos, chunk, new_tag))
-    return data
-
-def parse_stories(lines):
-    '''Parse stories provided in the bAbI tasks format
-    If only_supporting is true, only the sentences that support the answer are kept.
-    '''
-    data = []
-    document = []
+def extract_features_from_utterance(POS, nlp, turn_type, utterance, turn_ratio):
+    if POS:
+        pos_tags = [token.tag_ for token in nlp(utterance['text'])]
+    tags = extract_tags_from_slots(utterance)
     sentence = []
-    for line in lines:
-        line = line.strip()
-        if not line:
-            # empty line
-            if len(sentence) > 0:
-                document.append(sentence)
-                sentence = []
-            continue
-        elif line == '-DOCSTART- O':
-            # new document line
-            if len(document) > 0:
-                data.append(document)
-                document = []
-            continue
-        attrs = line.split(' ')
-        word = attrs[0]
-        pos = attrs[1]
-        turntype = attrs[2]
-        turnratio = attrs[3]
-        ner = attrs[4] ##FEATURES
-        # if I2B and ner[:2] == 'I-':
-        #     if len(sentence) == 0 or sentence[-1][3] == 'O':
-        #         ner = 'B-' + ner[2:]
-        sentence.append((word, pos, turntype, turnratio, ner)) ##FEATURES
-    
-    if len(sentence) > 0:
-        document.append(sentence)
-    if len(document) > 0:
-        data.append(document)
-    return data
+    for j, word in enumerate(utterance['tokens']):
+        features = {'turn_type': turn_type, 'turn_ratio': turn_ratio }
+        if POS:
+            features['pos_tag'] = pos_tags[j]
+        sentence.append((word, tags[j], features))
+    return sentence
 
-def get_stories(f, BIO=False, SBIEO=False):
-    '''Given a file name, read the file, retrieve the stories, and then convert the sentences into a single story.
-    If max_length is supplied, any stories longer than max_length tokens will be discarded.
-    '''
-    with open(f) as f:
-        data = parse_stories(f.readlines())
-        if SBIEO:
-            return convert2SBIEO(data)
-        elif BIO:
-            return convert2BIO(data)
-        else:
-            return data
+def parse_conversations(data, POS=False):
+    '''Parse conversations from the simulated dialogue (Google) dataset in json
+    format '''
+    if POS:
+        nlp = spacy.load('en')
+    dialogues = json.loads(data)
+    data = []
+    for dialogue in dialogues:
+        conversation = []
+        total_turns = len(dialogue['turns'])
+        for i, turn in enumerate(dialogue['turns']):
+            if 'system_utterance' in turn:
+                utterance = turn['system_utterance']
+                sentence = extract_features_from_utterance(POS, nlp, 'system', utterance, i/total_turns)
+                conversation.append(sentence)
+            if 'user_utterance' in turn:
+                utterance = turn['user_utterance']
+                sentence = extract_features_from_utterance(POS, nlp, 'user', utterance, i/total_turns)
+                conversation.append(sentence)
+        data.append(conversation)
+    return data
 
 def vectorize_data(
         data,
@@ -112,11 +73,11 @@ def vectorize_data(
     ret_memories = np.zeros((nb_sentences, memory_size))
     ret_answers = np.zeros((nb_sentences, sentence_size))
     ret_mem_idx = np.zeros((nb_sentences, sentence_size))
-    
+
     for i, document in enumerate(data):
         memory = []
         for j, sentence in enumerate(document):
-            for k, (word, _, _, _, ner) in enumerate(sentence): ##FEATURES
+            for k, (word, ner, _) in enumerate(sentence):
                 idx = sum(nb_sentence[:i]) + j
                 ret_sentences[idx, k] = word2idx[word] if word in word2idx else 1 # 1 for unk
                 ret_answers[idx, k] = ner2idx[ner]
@@ -126,13 +87,13 @@ def vectorize_data(
         idx_start = sum(nb_sentence[:i])
         for j, sentence in enumerate(document):
             ret_memories[idx_start + j, :len(memory)] = memory
-    
+
     return ret_sentences, ret_memories, ret_answers, ret_mem_idx
 
 class AbstractFeature(object):
     def generate_feature(self, word, features):
         raise NotImplementedError("Not implemented")
-    
+
     def feature_size(self):
         raise NotImplementedError("Not implemented")
 
@@ -199,7 +160,7 @@ class HasApostropheFeature(AbstractFeature):
 class LetterOnlyFeature(AbstractFeature):
     def __init__(self):
         self._vocab = {}
-    
+
     def generate_feature(self, word, features):
         w = filter(lambda x: x.isalpha(), word)
         if w in self._vocab:
@@ -207,7 +168,7 @@ class LetterOnlyFeature(AbstractFeature):
         else:
             self._vocab[w] = len(self._vocab) + 1 # +1 for unk
             return self._vocab[w]
-    
+
     def feature_size(self):
         return len(self._vocab) + 1
 
@@ -256,7 +217,7 @@ class WordPatternSummarizationFeature(AbstractFeature):
         for c in word:
             if c.isalpha() and c.islower():
                 if len(w) == 0 or w[-1] != 'a':
-                    w.append('a')    
+                    w.append('a')
             elif c.isalpha() and c.isupper():
                 if len(w) == 0 or w[-1] != 'A':
                     w.append('A')
@@ -275,37 +236,55 @@ class WordPatternSummarizationFeature(AbstractFeature):
 
 class TurnTypeIsUserFeature(AbstractFeature):
     def generate_feature(self, word, features):
-        return 1 if features['turntype'] == 'U' else 0
+        return 1 if features['turn_type'] == 'user' else 0
     def feature_size(self):
         return 1
 
 class TurnRatioFeature(AbstractFeature):
     def generate_feature(self, word, features):
-        return features['turnratio']
+        return features['turn_ratio']
+    def feature_size(self):
+        return 1
+
+class PosTagIsVerbFeature(AbstractFeature):
+    def generate_feature(self, word, features):
+        return 1 if features['pos_tag'] in ['VERB', 'VB', 'VBD', 'VBG', 'VBN', \
+         'VBP', 'VBZ' , 'MD', 'HVS', 'BES'] else 0
+    def feature_size(self):
+        return 1
+
+class PosTagIsSymbolFeature(AbstractFeature):
+    def generate_feature(self, word, features):
+        return 1 if features['pos_tag'] == ['SYM'] else 0
+    def feature_size(self):
+        return 1
+
+class PosTagIsPunctuationFeature(AbstractFeature):
+    def generate_feature(self, word, features):
+        return 1 if features['pos_tag'] in ['PUNCT', '-LRB-', '-RRB-', ',', \
+         ':', '.', '\'\'', '""', '#', '``', '$'] else 0
     def feature_size(self):
         return 1
 
 def vectorize_lexical_features(data, sentence_size, memory_size):
     feature_list = []
-    #cap_feature = CapitalizationFeature()
-    #all_cap_feature = AllCapitalizedFeature()
-    #all_lower_feature = AllLowerFeature()
-    #non_init_cap_feature = NonInitialCapFeature()
     mx_char_digit_feature = MixCharDigitFeature()
     has_punct_feature = HasPunctFeature()
     non_letter_feature = NonLetterOnlyFeature()
     turntype_feature = TurnTypeIsUserFeature()
     turnratio_feature = TurnRatioFeature()
+    pos_verb_feature = PosTagIsVerbFeature()
+    pos_symbol_feature = PosTagIsSymbolFeature()
+    pos_punctuation_feature = PosTagIsPunctuationFeature()
     feature_list = [
-        #cap_feature,
-        #all_cap_feature,
-        #all_lower_feature,
-        #non_init_cap_feature,
         mx_char_digit_feature,
         has_punct_feature,
         non_letter_feature,
         turntype_feature,
-        turnratio_feature
+        turnratio_feature,
+        pos_verb_feature,
+        pos_symbol_feature,
+        pos_punctuation_feature,  
     ]
     lexical_feature_size = sum([f.feature_size() for f in feature_list])
     nb_sentence = map(len, data)
@@ -315,10 +294,9 @@ def vectorize_lexical_features(data, sentence_size, memory_size):
     for i, document in enumerate(data):
         mlf = []
         for j, sentence in enumerate(document):
-            for k, (word, pos, turntype, turnratio, ner) in enumerate(sentence):  ##FEATURES
+            for k, (word, ner, word_features) in enumerate(sentence):
                 idx = sum(nb_sentence[:i]) + j
-                extra_features = { 'pos': pos, 'turntype': turntype, 'turnratio': turnratio }
-                features = [f.generate_feature(word, extra_features) for f in feature_list]
+                features = [f.generate_feature(word, word_features) for f in feature_list]
                 sentence_lexical_features[idx, k] = features
                 mlf.append(features)
         mlf = mlf[:memory_size]
@@ -326,4 +304,3 @@ def vectorize_lexical_features(data, sentence_size, memory_size):
         for j, sentence in enumerate(document):
             memory_lexical_features[idx_start + j, :len(mlf), :] = mlf
     return sentence_lexical_features, memory_lexical_features
-
