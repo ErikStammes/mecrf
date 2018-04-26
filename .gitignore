@@ -1,0 +1,8 @@
+.DS_Store
+/bin
+/lib
+/include
+/man
+/__pycache__
+*.pyc
+pip-selfcheck.json
