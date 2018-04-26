@@ -63,7 +63,7 @@ def parse_stories(lines):
                 document.append(sentence)
                 sentence = []
             continue
-        elif line == '-DOCSTART- -X- O O' or line == '-DOCSTART- -X- -X- O':
+        elif line == '-DOCSTART- O':
             # new document line
             if len(document) > 0:
                 data.append(document)
@@ -72,12 +72,13 @@ def parse_stories(lines):
         attrs = line.split(' ')
         word = attrs[0]
         pos = attrs[1]
-        chunk = attrs[2]
-        ner = attrs[3]
+        turntype = attrs[2]
+        turnratio = attrs[3]
+        ner = attrs[4] ##FEATURES
         # if I2B and ner[:2] == 'I-':
         #     if len(sentence) == 0 or sentence[-1][3] == 'O':
         #         ner = 'B-' + ner[2:]
-        sentence.append((word, pos, chunk, ner))
+        sentence.append((word, pos, turntype, turnratio, ner)) ##FEATURES
     
     if len(sentence) > 0:
         document.append(sentence)
@@ -115,7 +116,7 @@ def vectorize_data(
     for i, document in enumerate(data):
         memory = []
         for j, sentence in enumerate(document):
-            for k, (word, pos, chunk, ner) in enumerate(sentence):
+            for k, (word, _, _, _, ner) in enumerate(sentence): ##FEATURES
                 idx = sum(nb_sentence[:i]) + j
                 ret_sentences[idx, k] = word2idx[word] if word in word2idx else 1 # 1 for unk
                 ret_answers[idx, k] = ner2idx[ner]
@@ -129,38 +130,38 @@ def vectorize_data(
     return ret_sentences, ret_memories, ret_answers, ret_mem_idx
 
 class AbstractFeature(object):
-    def generate_feature(self, word):
+    def generate_feature(self, word, features):
         raise NotImplementedError("Not implemented")
     
     def feature_size(self):
         raise NotImplementedError("Not implemented")
 
 class CapitalizationFeature(AbstractFeature):
-    def generate_feature(self, word):
+    def generate_feature(self, word, features):
         return 1 if word[0].isupper() else 0
     def feature_size(self):
         return 1
 
 class AllCapitalizedFeature(AbstractFeature):
-    def generate_feature(self, word):
+    def generate_feature(self, word, features):
         return 1 if word.isupper() else 0
     def feature_size(self):
         return 1
 
 class AllLowerFeature(AbstractFeature):
-    def generate_feature(self, word):
+    def generate_feature(self, word, features):
         return 1 if word.islower() else 0
     def feature_size(self):
         return 1
 
 class NonInitialCapFeature(AbstractFeature):
-    def generate_feature(self, word):
+    def generate_feature(self, word, features):
         return 1 if any([c.isupper() for c in word[1:]]) else 0
     def feature_size(self):
         return 1
 
 class MixCharDigitFeature(AbstractFeature):
-    def generate_feature(self, word):
+    def generate_feature(self, word, features):
         return 1 if any([c.isalpha() for c in word]) and any([c.isdigit() for c in word]) else 0
     def feature_size(self):
         return 1
@@ -168,7 +169,7 @@ class MixCharDigitFeature(AbstractFeature):
 class HasPunctFeature(AbstractFeature):
     def __init__(self):
         self._punct_set = set(string.punctuation)
-    def generate_feature(self, word):
+    def generate_feature(self, word, features):
         return 1 if any([c in self._punct_set for c in word]) else 0
     def feature_size(self):
         return 1
@@ -178,7 +179,7 @@ class PreSuffixFeature(AbstractFeature):
         self._vocab = {}
         self._window_size = window_size
         self._is_prefix = is_prefix
-    def generate_feature(self, word):
+    def generate_feature(self, word, features):
         w = word.lower()
         fix = w[:self._window_size] if self._is_prefix else w[-self._window_size:]
         if fix in self._vocab:
@@ -190,7 +191,7 @@ class PreSuffixFeature(AbstractFeature):
         return len(self._vocab) + 1
 
 class HasApostropheFeature(AbstractFeature):
-    def generate_feature(self, word):
+    def generate_feature(self, word, features):
         return 1 if word.lower()[-2:] == "'s" else 0
     def feature_size(self):
         return 1
@@ -199,7 +200,7 @@ class LetterOnlyFeature(AbstractFeature):
     def __init__(self):
         self._vocab = {}
     
-    def generate_feature(self, word):
+    def generate_feature(self, word, features):
         w = filter(lambda x: x.isalpha(), word)
         if w in self._vocab:
             return self._vocab[w]
@@ -214,7 +215,7 @@ class NonLetterOnlyFeature(AbstractFeature):
     def __init__(self):
         self._vocab = {}
 
-    def generate_feature(self, word):
+    def generate_feature(self, word, features):
         w = filter(lambda x: not x.isalpha(), word)
         if w in self._vocab:
             return self._vocab[w]
@@ -228,7 +229,7 @@ class NonLetterOnlyFeature(AbstractFeature):
 class WordPatternFeature(AbstractFeature):
     def __init__(self):
         self._vocab = {}
-    def generate_feature(self, word):
+    def generate_feature(self, word, features):
         w = []
         for c in word:
             if c.isalpha() and c.islower():
@@ -250,7 +251,7 @@ class WordPatternFeature(AbstractFeature):
 class WordPatternSummarizationFeature(AbstractFeature):
     def __init__(self):
         self._vocab = {}
-    def generate_feature(self, word):
+    def generate_feature(self, word, features):
         w = []
         for c in word:
             if c.isalpha() and c.islower():
@@ -272,21 +273,39 @@ class WordPatternSummarizationFeature(AbstractFeature):
     def feature_size(self):
         return len(self._vocab) + 1
 
+class TurnTypeIsUserFeature(AbstractFeature):
+    def generate_feature(self, word, features):
+        return 1 if features['turntype'] == 'U' else 0
+    def feature_size(self):
+        return 1
+
+class TurnRatioFeature(AbstractFeature):
+    def generate_feature(self, word, features):
+        return features['turnratio']
+    def feature_size(self):
+        return 1
+
 def vectorize_lexical_features(data, sentence_size, memory_size):
     feature_list = []
-    cap_feature = CapitalizationFeature()
-    all_cap_feature = AllCapitalizedFeature()
-    all_lower_feature = AllLowerFeature()
-    non_init_cap_feature = NonInitialCapFeature()
+    #cap_feature = CapitalizationFeature()
+    #all_cap_feature = AllCapitalizedFeature()
+    #all_lower_feature = AllLowerFeature()
+    #non_init_cap_feature = NonInitialCapFeature()
     mx_char_digit_feature = MixCharDigitFeature()
     has_punct_feature = HasPunctFeature()
+    non_letter_feature = NonLetterOnlyFeature()
+    turntype_feature = TurnTypeIsUserFeature()
+    turnratio_feature = TurnRatioFeature()
     feature_list = [
-        cap_feature,
-        all_cap_feature,
-        all_lower_feature,
-        non_init_cap_feature,
+        #cap_feature,
+        #all_cap_feature,
+        #all_lower_feature,
+        #non_init_cap_feature,
         mx_char_digit_feature,
         has_punct_feature,
+        non_letter_feature,
+        turntype_feature,
+        turnratio_feature
     ]
     lexical_feature_size = sum([f.feature_size() for f in feature_list])
     nb_sentence = map(len, data)
@@ -296,9 +315,10 @@ def vectorize_lexical_features(data, sentence_size, memory_size):
     for i, document in enumerate(data):
         mlf = []
         for j, sentence in enumerate(document):
-            for k, (word, pos, chunk, ner) in enumerate(sentence):
+            for k, (word, pos, turntype, turnratio, ner) in enumerate(sentence):  ##FEATURES
                 idx = sum(nb_sentence[:i]) + j
-                features = [f.generate_feature(word) for f in feature_list]
+                extra_features = { 'pos': pos, 'turntype': turntype, 'turnratio': turnratio }
+                features = [f.generate_feature(word, extra_features) for f in feature_list]
                 sentence_lexical_features[idx, k] = features
                 mlf.append(features)
         mlf = mlf[:memory_size]

@@ -13,7 +13,6 @@ import tensorflow as tf
 import numpy as np
 import cPickle as pickle
 
-import sys
 import logging
 import uuid
 import gc
@@ -26,18 +25,18 @@ tf.flags.DEFINE_float("max_grad_norm", 5.0, "Clip gradients to this norm.")
 tf.flags.DEFINE_integer("evaluation_interval", 10, "Evaluate and print results every x epochs")
 tf.flags.DEFINE_integer("batch_size", 32, "Batch size for training.")
 tf.flags.DEFINE_integer("epochs", 100, "Number of epochs to train for.")
-tf.flags.DEFINE_integer("embedding_size", 20, "Embedding size for embedding matrices.")
-tf.flags.DEFINE_integer("memory_size", 500, "Maximum size of memory.")
+tf.flags.DEFINE_integer("embedding_size", 20, "Embedding size for embedding matrices.") # small?
+tf.flags.DEFINE_integer("memory_size", 500, "Maximum size of memory.") #dimensions (?)
 tf.flags.DEFINE_integer("random_state", 101, "Random state.")
 tf.flags.DEFINE_string("data_dir", "data/conll03-ner/", "Directory containing CoNLL-03-NER data")
 tf.flags.DEFINE_integer("rnn_hidden_size", 20, "RNN hidden size [20]")
 tf.flags.DEFINE_string("embedding_file", None, "Pre-trained word embedding file path [None]")
 tf.flags.DEFINE_boolean("update_embeddings", False, "Update embeddings [False]")
 tf.flags.DEFINE_boolean("bilinear", False, "Use bilinear [False]")
-tf.flags.DEFINE_float("keep_prob", 1.0, "Keep prob [1.0]")
-tf.flags.DEFINE_integer("mlp_hidden_size", 64, "MLP hidden state size [64]")
+tf.flags.DEFINE_float("keep_prob", 1.0, "Keep prob [1.0]") # try 0.8 (from paper)
+tf.flags.DEFINE_integer("mlp_hidden_size", 64, "MLP hidden state size [64]") # small
 tf.flags.DEFINE_integer("rnn_memory_hidden_size", 0, "RNN memory hidden size [0]")
-tf.flags.DEFINE_string("nonlin", "tanh", "Non-linearity [tanh]")
+tf.flags.DEFINE_string("nonlin", "tanh", "Non-linearity [tanh]") # try relu
 
 FLAGS = tf.flags.FLAGS
 
@@ -45,7 +44,7 @@ def get_ner_dict(data):
     ner2idx = {}
     for document in data:
         for sentence in document:
-            for _, _, _, ner in sentence:
+            for _, _, _, _, ner in sentence: ##FEATURES
                 if ner not in ner2idx:
                     ner2idx[ner] = len(ner2idx)
     return ner2idx
@@ -55,21 +54,21 @@ def load_embeddings(data, in_file, binary=False):
     emb = {}
     unk = []
     with open(in_file) as in_f:
-        nb_words, nb_dim = None, None
+        #nb_words, nb_dim = None, None
         for line in in_f:
             line = line.strip()
             attrs = line.split(' ')
             if len(attrs) == 2:
-                nb_words = int(attrs[0])
-                nb_dim = int(attrs[1])
+                #nb_words = int(attrs[0])
+                #nb_dim = int(attrs[1])
                 # self._embeddings = np.zeros((nb_words + 2, nb_dim), dtype=np.float32)
                 continue
             word = attrs[0]
             word_emb = map(float, attrs[1:])
             emb[word] = word_emb
             unk.append(word_emb)
-    # unk = np.mean(np.array(unk), axis=0)
-    unk = emb['UNKNOWN']
+    unk = np.mean(np.array(unk), axis=0)
+    #unk = emb['UNKNOWN']
     # print(len(emb))
     ret_emb = []
     ret_emb.append(np.zeros(len(unk))) # padding
@@ -77,7 +76,7 @@ def load_embeddings(data, in_file, binary=False):
     ret_word2idx = {}
     for document in data:
         for sentence in document:
-            for word, _, _, _ in sentence:
+            for word, _, _, _, _ in sentence: ##FEATURES
                 if word.lower() in emb:
                     if word not in ret_word2idx:
                         ret_word2idx[word] = len(ret_emb)
@@ -133,17 +132,17 @@ if __name__ == "__main__":
 
     train = load_task(
         os.path.join(FLAGS.data_dir, 'eng.train'), 
-        BIO=True, SBIEO=False,
+        BIO=False, SBIEO=False,
     )
     train_flattened = [s for d in train for s in d]
     val = load_task(
         os.path.join(FLAGS.data_dir, 'eng.testa'), 
-        BIO=True, SBIEO=False,
+        BIO=False, SBIEO=False,
     )
     val_flattened = [s for d in val for s in d]
     test = load_task(
         os.path.join(FLAGS.data_dir, 'eng.testb'), 
-        BIO=True, SBIEO=False,
+        BIO=False, SBIEO=False,
     )
     test_flattened = [s for d in test for s in d]
     
@@ -319,6 +318,3 @@ if __name__ == "__main__":
 
         logger.info('Best validation acc: %.2f, precision: %.2f, recall: %.2f, f_score: %.2f' % (best_val_perf))
         logger.info('Best test acc: %.2f, precision: %.2f, recall: %.2f, f_score: %.2f' % (best_test_perf))
-            
-
-    
