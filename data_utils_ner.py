@@ -26,13 +26,36 @@ def extract_tags_from_slots(utterance):
             tags_list[start+i] = 'I-'+slot['slot']
     return tags_list
 
-def extract_features_from_utterance(POS, nlp, turn_type, utterance, turn_ratio):
+# TODO: properly do this!
+# use actual values from acts
+def extract_acts_from_turn(turn, act_key):
+    if act_key not in turn:
+        return
+    features = {}
+    acts = turn[act_key]
+    for act in acts:
+        act_type = act['type']
+        if 'slot' in act:
+            act_slot = act['slot']
+            features[act_type] = act_slot
+        else:
+            features[act_type] = 0
+    return features
+
+
+def extract_features_from_utterance(POS, turn_type, turn, turn_ratio):
+    utterance_key = turn_type + '_utterance'
+    act_key = turn_type + '_acts'
     if POS:
-        pos_tags = [token.tag_ for token in nlp(utterance['text'])]
-    tags = extract_tags_from_slots(utterance)
+        nlp = spacy.load('en')
+        pos_tags = [token.tag_ for token in nlp(turn[utterance_key]['text'])]
+    tags = extract_tags_from_slots(turn[utterance_key])
     sentence = []
-    for j, word in enumerate(utterance['tokens']):
-        features = {'turn_type': turn_type, 'turn_ratio': turn_ratio }
+    turn_acts = extract_acts_from_turn(turn, act_key)
+    for j, word in enumerate(turn[utterance_key]['tokens']):
+        features = {'turn_type': turn_type,
+                    'turn_ratio': turn_ratio,
+                    'turn_acts': turn_acts}
         if POS:
             features['pos_tag'] = pos_tags[j]
         sentence.append((word, tags[j], features))
@@ -41,8 +64,6 @@ def extract_features_from_utterance(POS, nlp, turn_type, utterance, turn_ratio):
 def parse_conversations(data, POS=False):
     '''Parse conversations from the simulated dialogue (Google) dataset in json
     format '''
-    if POS:
-        nlp = spacy.load('en')
     dialogues = json.loads(data)
     data = []
     for dialogue in dialogues:
@@ -50,14 +71,12 @@ def parse_conversations(data, POS=False):
         total_turns = len(dialogue['turns'])
         for i, turn in enumerate(dialogue['turns']):
             if 'system_utterance' in turn:
-                utterance = turn['system_utterance']
-                sentence = extract_features_from_utterance(POS, nlp, 'system', utterance, i/total_turns)
+                sentence = extract_features_from_utterance(POS, 'system', turn, i/total_turns)
                 conversation.append(sentence)
             if 'user_utterance' in turn:
-                utterance = turn['user_utterance']
-                sentence = extract_features_from_utterance(POS, nlp, 'user', utterance, i/total_turns)
+                sentence = extract_features_from_utterance(POS, 'user', turn, i/total_turns)
                 conversation.append(sentence)
-        data.append(conversation)
+        data.append(conversation)       
     return data
 
 def vectorize_data(
@@ -266,6 +285,15 @@ class PosTagIsPunctuationFeature(AbstractFeature):
     def feature_size(self):
         return 1
 
+class SystemRequestsInfoFeature(AbstractFeature):
+    def generate_feature(self, word, features):
+        if features['turn_type'] == 'system':
+            return 1 if 'REQUEST' in features['turn_acts'] else 0
+        else:
+            return 0
+    def feature_size(self):
+        return 1
+
 def vectorize_lexical_features(data, sentence_size, memory_size):
     feature_list = []
     mx_char_digit_feature = MixCharDigitFeature()
@@ -276,15 +304,17 @@ def vectorize_lexical_features(data, sentence_size, memory_size):
     pos_verb_feature = PosTagIsVerbFeature()
     pos_symbol_feature = PosTagIsSymbolFeature()
     pos_punctuation_feature = PosTagIsPunctuationFeature()
+    system_requests_feature = SystemRequestsInfoFeature()
     feature_list = [
         mx_char_digit_feature,
         has_punct_feature,
         non_letter_feature,
         turntype_feature,
         turnratio_feature,
-        pos_verb_feature,
-        pos_symbol_feature,
-        pos_punctuation_feature,  
+        #pos_verb_feature,
+        #pos_symbol_feature,
+        #pos_punctuation_feature,
+        system_requests_feature
     ]
     lexical_feature_size = sum([f.feature_size() for f in feature_list])
     nb_sentence = map(len, data)

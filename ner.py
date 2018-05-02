@@ -133,17 +133,17 @@ if __name__ == "__main__":
 
     train = load_task(
         os.path.join(FLAGS.data_dir, 'train-50.json'), 
-        POS=True
+        POS=False
     )
     train_flattened = [s for d in train for s in d]
     val = load_task(
         os.path.join(FLAGS.data_dir, 'dev.json'), 
-        POS=True
+        POS=False
     )
     val_flattened = [s for d in val for s in d]
     test = load_task(
         os.path.join(FLAGS.data_dir, 'test.json'), 
-        POS=True
+        POS=False
     )
     test_flattened = [s for d in test for s in d]
     
