@@ -1,4 +1,8 @@
-# Capturing Long-range Contextual Dependencies with Memory-enhanced Conditional Random Fields (IJCNLP-2017)
+Memory-enhanced CRF implementation for the slot filling problem for conversational agents.
+
+Original ME-CRF code by Liu et al. 
+
+### Capturing Long-range Contextual Dependencies with Memory-enhanced Conditional Random Fields (IJCNLP-2017)
 
 ```
 Python-2.7.12
@@ -7,7 +11,7 @@ Numpy-1.13.1
 ```
 
 ```shell
-$ python ner.py --embedding_file PATH/TO/SENNA_EMBEDDING_FILE
+$ python ner.py --embedding_file PATH/TO/WORD_EMBEDDING_FILE
 ```
 
 ```
