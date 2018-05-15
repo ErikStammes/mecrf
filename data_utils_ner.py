@@ -1,19 +1,19 @@
 from __future__ import absolute_import
 from __future__ import division
 
-from itertools import chain
-
 import os
 import re
 import string
 import json
+from copy import copy
 import numpy as np
 import spacy
+
+nlp = spacy.load('en')
 
 def load_task(in_file, POS=False):
     with open(in_file) as f:
         return parse_conversations(f.read(), POS=POS)
-    return data
 
 def extract_tags_from_slots(utterance):
     tags_list = ['O'] * len(utterance['tokens'])
@@ -27,6 +27,7 @@ def extract_tags_from_slots(utterance):
     return tags_list
 
 # TODO: properly do this!
+# add multiple acts
 # use actual values from acts
 def extract_acts_from_turn(turn, act_key):
     if act_key not in turn:
@@ -47,15 +48,16 @@ def extract_features_from_utterance(POS, turn_type, turn, turn_ratio):
     utterance_key = turn_type + '_utterance'
     act_key = turn_type + '_acts'
     if POS:
-        nlp = spacy.load('en')
         pos_tags = [token.tag_ for token in nlp(turn[utterance_key]['text'])]
     tags = extract_tags_from_slots(turn[utterance_key])
     sentence = []
     turn_acts = extract_acts_from_turn(turn, act_key)
+    sentence_features = {'turn_type': turn_type,
+                         'turn_ratio': turn_ratio,
+                         'turn_acts': turn_acts}
+    sentence.append(('<START>', 'O', sentence_features))
     for j, word in enumerate(turn[utterance_key]['tokens']):
-        features = {'turn_type': turn_type,
-                    'turn_ratio': turn_ratio,
-                    'turn_acts': turn_acts}
+        features = {}
         if POS:
             features['pos_tag'] = pos_tags[j]
         sentence.append((word, tags[j], features))
@@ -76,16 +78,10 @@ def parse_conversations(data, POS=False):
             if 'user_utterance' in turn:
                 sentence = extract_features_from_utterance(POS, 'user', turn, i/total_turns)
                 conversation.append(sentence)
-        data.append(conversation)       
+        data.append(conversation)   
     return data
 
-def vectorize_data(
-        data,
-        word2idx,
-        sentence_size,
-        memory_size,
-        ner2idx,
-    ):
+def vectorize_data(data, word2idx, sentence_size, memory_size, ner2idx):
     nb_sentence = map(len, data)
     nb_sentences = sum(nb_sentence)
     ret_sentences = np.zeros((nb_sentences, sentence_size))
@@ -255,13 +251,13 @@ class WordPatternSummarizationFeature(AbstractFeature):
 
 class TurnTypeIsUserFeature(AbstractFeature):
     def generate_feature(self, word, features):
-        return 1 if features['turn_type'] == 'user' else 0
+        return 1 if 'turn_type' in features and features['turn_type'] == 'user' else 0
     def feature_size(self):
         return 1
 
 class TurnRatioFeature(AbstractFeature):
     def generate_feature(self, word, features):
-        return features['turn_ratio']
+        return features['turn_ratio'] if 'turn_ratio' in features else 0
     def feature_size(self):
         return 1
 
@@ -285,14 +281,138 @@ class PosTagIsPunctuationFeature(AbstractFeature):
     def feature_size(self):
         return 1
 
-class SystemRequestsInfoFeature(AbstractFeature):
+class SpeechActFeature(AbstractFeature):
+    def __init__(self):
+        self._vocab = {'NONE': 0}
     def generate_feature(self, word, features):
-        if features['turn_type'] == 'system':
-            return 1 if 'REQUEST' in features['turn_acts'] else 0
-        else:
-            return 0
+        if 'turn_acts' not in features or not features['turn_acts']: #check if empty dict
+            return self._vocab['NONE']
+        for act in features['turn_acts']:
+            if act in self._vocab:
+                return self._vocab[act]
+            else:
+                self._vocab[act] = len(self._vocab)
+                return self._vocab[act]
     def feature_size(self):
-        return 1
+        return len(self._vocab)
+    def get_vocab(self):
+        return self._vocab
+
+class PreviousSpeechActFeature(AbstractFeature):
+    def __init__(self):
+        self._vocab = {'NONE': 0}
+    def generate_feature(self, word, features):
+        if '-1:turn_acts' not in features or not features['-1:turn_acts']: #check if empty dict
+            return self._vocab['NONE']
+        for act in features['-1:turn_acts']:
+            if act in self._vocab:
+                return self._vocab[act]
+            else:
+                self._vocab[act] = len(self._vocab)
+                return self._vocab[act]
+    def feature_size(self):
+        return len(self._vocab)
+    def get_vocab(self):
+        return self._vocab           
+
+class SpeechActSlotValueFeature(AbstractFeature):
+    def __init__(self):
+        self._vocab = {'NONE': 0}
+    def generate_feature(self, word, features):
+        if 'turn_acts' not in features or not features['turn_acts']: # check if empty dict
+            return self._vocab['NONE']
+        for act in features['turn_acts']:
+            act_value = features['turn_acts'][act]
+            if act_value == 0:
+                return self._vocab['NONE']
+            if act_value in self._vocab:
+                return self._vocab[act_value]
+            else:
+                self._vocab[act_value] = len(self._vocab)
+                return self._vocab[act_value]
+    def feature_size(self):
+        return len(self._vocab)
+
+'''
+When the system requests a certain slot value in it's utterance this feature sets the
+slot name as its value.
+'''
+class SystemRequestsInfoFeature(AbstractFeature):
+    def __init__(self):
+        self._vocab = {'NONE': 0}
+    def generate_feature(self, word, features):
+        if 'turn_type' not in features or \
+                features['turn_type'] != 'user' or \
+                '-1:turn_acts' not in features or \
+                'REQUEST' not in features['-1:turn_acts']:
+            return self._vocab['NONE']
+        act_value = features['-1:turn_acts']['REQUEST']
+        if act_value == 0:
+            return self._vocab['NONE']
+        if act_value in self._vocab:
+            return self._vocab[act_value]
+        else:
+            self._vocab[act_value] = len(self._vocab)
+            return self._vocab[act_value]
+    def feature_size(self):
+        return len(self._vocab)
+
+class SystemShowsSelectionFeature(AbstractFeature):
+    def __init__(self):
+        self._vocab = {'NONE': 0}
+    def generate_feature(self, word, features):
+        if 'turn_type' not in features or \
+                features['turn_type'] != 'user' or \
+                '-1:turn_acts' not in features or \
+                'SELECT' not in features['-1:turn_acts']:
+            return self._vocab['NONE']
+        act_value = features['-1:turn_acts']['SELECT']
+        if act_value == 0:
+            return self._vocab['NONE']
+        if act_value in self._vocab:
+            return self._vocab[act_value]
+        else:
+            self._vocab[act_value] = len(self._vocab)
+            return self._vocab[act_value]
+    def feature_size(self):
+        return len(self._vocab)    
+
+class SystemWantsConfirmationFeature(AbstractFeature):
+    def __init__(self):
+        self._vocab = {'NONE': 0}
+    def generate_feature(self, word, features):
+        if 'turn_type' not in features or \
+                features['turn_type'] != 'user' or \
+                '-1:turn_acts' not in features or \
+                'CONFIRM' not in features['-1:turn_acts']:
+            return self._vocab['NONE']
+        act_value = features['-1:turn_acts']['CONFIRM']
+        if act_value == 0:
+            return self._vocab['NONE']
+        if act_value in self._vocab:
+            return self._vocab[act_value]
+        else:
+            self._vocab[act_value] = len(self._vocab)
+            return self._vocab[act_value]
+    def feature_size(self):
+        return len(self._vocab)
+
+class DialogActFeature(AbstractFeature):
+    def __init__(self):
+        self._vocab = {}
+    def generate_feature(self, word, features):
+        acts = [0] * 5
+        if 'turn_acts' not in features or not features['turn_acts']:
+            return acts
+        for i, act in enumerate(features['turn_acts']):
+            if act in self._vocab:
+                acts[i] = self._vocab[act]
+            else:
+                self._vocab[act] = len(self._vocab) + 1
+                acts[i] = self._vocab[act]
+        return acts
+    def feature_size(self):
+        return len(self._vocab)
 
 def vectorize_lexical_features(data, sentence_size, memory_size):
     feature_list = []
@@ -304,30 +424,50 @@ def vectorize_lexical_features(data, sentence_size, memory_size):
     pos_verb_feature = PosTagIsVerbFeature()
     pos_symbol_feature = PosTagIsSymbolFeature()
     pos_punctuation_feature = PosTagIsPunctuationFeature()
-    system_requests_feature = SystemRequestsInfoFeature()
+    speech_act_feature = SpeechActFeature()
+    prev_speech_act_feature = PreviousSpeechActFeature()
+    act_value_feature = SpeechActSlotValueFeature()
+    sys_req_info_feature = SystemRequestsInfoFeature()
+    sys_selection_feature = SystemShowsSelectionFeature()
+    sys_confirms_feature = SystemWantsConfirmationFeature()
     feature_list = [
         mx_char_digit_feature,
         has_punct_feature,
         non_letter_feature,
         turntype_feature,
         turnratio_feature,
-        #pos_verb_feature,
-        #pos_symbol_feature,
-        #pos_punctuation_feature,
-        system_requests_feature
+        # pos_verb_feature,
+        # pos_symbol_feature,
+        # pos_punctuation_feature,
+        # speech_act_feature,
+        # prev_speech_act_feature,        
+        # act_value_feature
+        sys_req_info_feature,
+        sys_selection_feature,
+        sys_confirms_feature
     ]
+    #dialog_act_feature = DialogActFeature()
     lexical_feature_size = sum([f.feature_size() for f in feature_list])
+    #dialog_act_size = dialog_act_feature.feature_size()
     nb_sentence = map(len, data)
     nb_sentences = sum(nb_sentence)
     sentence_lexical_features = np.zeros((nb_sentences, sentence_size, lexical_feature_size))
     memory_lexical_features = np.zeros((nb_sentences, memory_size, lexical_feature_size))
+    #dialog_act_features = np.zeros((nb_sentences, 5))
     for i, document in enumerate(data):
         mlf = []
         for j, sentence in enumerate(document):
-            for k, (word, ner, word_features) in enumerate(sentence):
+            for k, (word, _, word_features) in enumerate(sentence):
                 idx = sum(nb_sentence[:i]) + j
-                features = [f.generate_feature(word, word_features) for f in feature_list]
+                (_, _, prev_features) = sentence[k-1]
+                word_features_copy = copy(word_features)
+                (_, _, prev_features) = document[j-1][0]
+                for key in prev_features:
+                    word_features_copy['-1:'+key] = prev_features[key]
+                features = [f.generate_feature(word, word_features_copy) for f in feature_list]
                 sentence_lexical_features[idx, k] = features
+                #act_features = dialog_act_feature.generate_feature(word, word_features_copy)
+                #dialog_act_features[idx] = act_features
                 mlf.append(features)
         mlf = mlf[:memory_size]
         idx_start = sum(nb_sentence[:i])

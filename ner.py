@@ -4,6 +4,7 @@ from __future__ import print_function
 import os
 import sys
 import operator
+import re
 
 from data_utils_ner import *
 from mecrf_ner import *
@@ -128,21 +129,21 @@ if __name__ == "__main__":
     formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     ch.setFormatter(formatter)
     logger.addHandler(ch)
-    
+
     logger.info(" ".join(sys.argv))
 
     train = load_task(
-        os.path.join(FLAGS.data_dir, 'train-50.json'), 
+        os.path.join(FLAGS.data_dir, 'train-100.json'),
         POS=False
     )
     train_flattened = [s for d in train for s in d]
     val = load_task(
-        os.path.join(FLAGS.data_dir, 'dev.json'), 
+        os.path.join(FLAGS.data_dir, 'dev.json'),
         POS=False
     )
     val_flattened = [s for d in val for s in d]
     test = load_task(
-        os.path.join(FLAGS.data_dir, 'test.json'), 
+        os.path.join(FLAGS.data_dir, 'test.json'),
         POS=False
     )
     test_flattened = [s for d in test for s in d]
