@@ -397,6 +397,27 @@ class SystemWantsConfirmationFeature(AbstractFeature):
     def feature_size(self):
         return len(self._vocab)
 
+# TODO: this feature really could benefit from the actual slot values
+class SystemOffersFeature(AbstractFeature):
+    def __init__(self):
+        self._vocab = {'NONE': 0}
+    def generate_feature(self, word, features):
+        if 'turn_type' not in features or \
+                features['turn_type'] != 'user' or \
+                '-1:turn_acts' not in features or \
+                'OFFER' not in features['-1:turn_acts']:
+            return self._vocab['NONE']
+        act_value = features['-1:turn_acts']['OFFER']
+        if act_value == 0:
+            return self._vocab['NONE']
+        if act_value in self._vocab:
+            return self._vocab[act_value]
+        else:
+            self._vocab[act_value] = len(self._vocab)
+            return self._vocab[act_value]
+    def feature_size(self):
+        return len(self._vocab)           
+
 class DialogActFeature(AbstractFeature):
     def __init__(self):
         self._vocab = {}
@@ -430,6 +451,7 @@ def vectorize_lexical_features(data, sentence_size, memory_size):
     sys_req_info_feature = SystemRequestsInfoFeature()
     sys_selection_feature = SystemShowsSelectionFeature()
     sys_confirms_feature = SystemWantsConfirmationFeature()
+    sys_offers_feature = SystemOffersFeature()
     feature_list = [
         mx_char_digit_feature,
         has_punct_feature,
@@ -444,7 +466,8 @@ def vectorize_lexical_features(data, sentence_size, memory_size):
         # act_value_feature
         sys_req_info_feature,
         sys_selection_feature,
-        sys_confirms_feature
+        sys_confirms_feature,
+        sys_offers_feature
     ]
     #dialog_act_feature = DialogActFeature()
     lexical_feature_size = sum([f.feature_size() for f in feature_list])
