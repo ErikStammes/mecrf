@@ -5,6 +5,7 @@ import tensorflow as tf
 import numpy as np
 from six.moves import range
 from itertools import chain
+# from tensorflow.python import debug as tf_debug
 
 import logging
 import sys
@@ -135,6 +136,7 @@ class MECRF(object):
         self.train_op = train_op
 
         init_op = tf.global_variables_initializer()
+        self._saver = tf.train.Saver()
         self._sess = session
         self._sess.run(init_op)
 
@@ -251,6 +253,7 @@ class MECRF(object):
             sent_len = self._seq_len(sentences)
             # [None]
             
+            # TODO: check if this (or one of the lookups below is causing the tensorflow user warning about memory consumption)
             sent_emb = tf.nn.embedding_lookup(self._emb, sentences)
             # [None, sentence_size, emb_size]
 
@@ -442,4 +445,7 @@ class MECRF(object):
             predictions.append(viterbi_sequence)
             
         return predictions
+
+    def save_session(self, loc):
+        return self._saver.save(self._sess, loc)
     

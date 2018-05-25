@@ -133,17 +133,17 @@ if __name__ == "__main__":
     logger.info(" ".join(sys.argv))
 
     train = load_task(
-        os.path.join(FLAGS.data_dir, 'train-100.json'),
+        os.path.join(FLAGS.data_dir, 'train_pos.json'),
         POS=False
     )
     train_flattened = [s for d in train for s in d]
     val = load_task(
-        os.path.join(FLAGS.data_dir, 'dev.json'),
+        os.path.join(FLAGS.data_dir, 'dev_pos.json'),
         POS=False
     )
     val_flattened = [s for d in val for s in d]
     test = load_task(
-        os.path.join(FLAGS.data_dir, 'test.json'),
+        os.path.join(FLAGS.data_dir, 'test_pos.json'),
         POS=False
     )
     test_flattened = [s for d in test for s in d]
@@ -187,9 +187,11 @@ if __name__ == "__main__":
     val_sentences, val_memories, val_answers, val_mem_idx = vectorize_data(val, word2idx, sentence_size, memory_size, ner2idx)
     test_sentences, test_memories, test_answers, test_mem_idx = vectorize_data(test, word2idx, sentence_size, memory_size, ner2idx)
     
-    train_sentence_lexical_features, train_memory_lexical_features = vectorize_lexical_features(train, sentence_size, memory_size)
-    val_sentence_lexical_features, val_memory_lexical_features = vectorize_lexical_features(val, sentence_size, memory_size)
-    test_sentence_lexical_features, test_memory_lexical_features = vectorize_lexical_features(test, sentence_size, memory_size)
+    slot_values = np.unique([iob_tag[2:] for iob_tag in ner2idx.keys() if iob_tag != 'O'])
+
+    train_sentence_lexical_features, train_memory_lexical_features = vectorize_lexical_features(train, sentence_size, memory_size, slot_values)
+    val_sentence_lexical_features, val_memory_lexical_features = vectorize_lexical_features(val, sentence_size, memory_size, slot_values)
+    test_sentence_lexical_features, test_memory_lexical_features = vectorize_lexical_features(test, sentence_size, memory_size, slot_values)
 
     lexical_features_size = train_sentence_lexical_features.shape[2]
 
@@ -317,6 +319,18 @@ if __name__ == "__main__":
                     best_val = val_f_score
                     best_val_perf = val_perf
                     best_test_perf = test_perf
+                    epochs_since_best = 0
+                    #TODO: save model to disk
+                    save_path = model.save_session('tmp/model.ckpt')
+                    logger.info("Model saved in path: %s" % save_path)
+                else:
+                    epochs_since_best += 1
+                    if epochs_since_best > 3:
+                        logger.info('No improvements after 4 epochs. Quitting now..')
+                        sess.close()
+                        quit()
+                    
+
 
                 logger.info('-----------------------')
 
