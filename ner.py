@@ -39,6 +39,7 @@ tf.flags.DEFINE_float("keep_prob", 1.0, "Keep prob [1.0]") # try 0.8 (from paper
 tf.flags.DEFINE_integer("mlp_hidden_size", 64, "MLP hidden state size [64]") # small
 tf.flags.DEFINE_integer("rnn_memory_hidden_size", 0, "RNN memory hidden size [0]")
 tf.flags.DEFINE_string("nonlin", "tanh", "Non-linearity [tanh]") # try relu
+tf.flags.DEFINE_string("dataset_size", None, "Dataset size (same as filename)")
 
 FLAGS = tf.flags.FLAGS
 
@@ -87,10 +88,12 @@ def load_embeddings(data, in_file, binary=False):
                     ret_word2idx[word] = 1 # unk
     return np.asarray(ret_emb, dtype=np.float32), ret_word2idx
 
-def output_conll(Gold, Pred, out_F):
+def output_conll(Gold, Pred, out_F, eval_sys):
     with open(out_F, 'w+') as f:
         assert len(Gold) == len(Pred)
         for gold, pred in zip(Gold, Pred):
+            if not eval_sys and gold[0][2]['turn_type'] != 'user':
+                continue
             assert len(gold) == len(pred)
             for g, p in zip(gold, pred):
                 f.write(' '.join([g[0], g[1], p]))
@@ -98,12 +101,12 @@ def output_conll(Gold, Pred, out_F):
             f.write('\n')
 
 regex_pattern = r'accuracy:\s+([\d]+\.[\d]+)%; precision:\s+([\d]+\.[\d]+)%; recall:\s+([\d]+\.[\d]+)%; FB1:\s+([\d]+\.[\d]+)'
-def eval(gold, pred):
+def eval(gold, pred, eval_sys=True):
     out_filename = str(uuid.uuid4())
     cur_dir = os.path.dirname(__file__)
-    out_abs_filepath = os.path.abspath(os.path.join(cur_dir, out_filename))
+    out_abs_filepath = os.path.abspath(os.path.join(cur_dir, 'output', out_filename))
     try:
-        output_conll(gold, pred, out_abs_filepath)
+        output_conll(gold, pred, out_abs_filepath, eval_sys)
         cmd_process = os.popen(
             "perl " + os.path.abspath(os.path.join(cur_dir, "conlleval.pl")) + " < " + out_abs_filepath)
         cmd_ret = cmd_process.read()
@@ -132,18 +135,26 @@ if __name__ == "__main__":
 
     logger.info(" ".join(sys.argv))
 
+    if FLAGS.dataset_size is not None:
+        train_name = 'train-' + FLAGS.dataset_size + '.json'
+    else:
+        train_name = 'train.json'
+    dev_name = 'dev.json'
+    test_name = 'test.json'
+
+
     train = load_task(
-        os.path.join(FLAGS.data_dir, 'train_pos.json'),
+        os.path.join(FLAGS.data_dir, train_name),
         POS=False
     )
     train_flattened = [s for d in train for s in d]
     val = load_task(
-        os.path.join(FLAGS.data_dir, 'dev_pos.json'),
+        os.path.join(FLAGS.data_dir, dev_name),
         POS=False
     )
     val_flattened = [s for d in val for s in d]
     test = load_task(
-        os.path.join(FLAGS.data_dir, 'test_pos.json'),
+        os.path.join(FLAGS.data_dir, test_name),
         POS=False
     )
     test_flattened = [s for d in test for s in d]
@@ -225,12 +236,13 @@ if __name__ == "__main__":
     else:
         raise
     
-    best_val = -1
-    best_val_perf, best_test_perf = None, None
+    best_score = -1
+    best_test_perf = None
 
     session_conf = tf.ConfigProto(
         intra_op_parallelism_threads=4,
-        inter_op_parallelism_threads=4
+        inter_op_parallelism_threads=4,
+        gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=0.55)
     )
 
     with tf.Session(config=session_conf) as sess:
@@ -306,6 +318,14 @@ if __name__ == "__main__":
                 val_perf = (acc, precision, recall, f_score)
 
                 test_preds = model.predict(test_memories, test_sentences, test_mem_idx, test_sentence_lexical_features, test_memory_lexical_features)
+                # test_scores, acc, precision, recall, f_score = eval(
+                #     test_flattened,
+                #     [[idx2ner[p] for p in pred] for pred in test_preds],
+                #     False
+                # )
+                # logging.info('Test without system utterances acc: %.2f, precision: %.2f, recall: %.2f, f_score: %.2f' % (acc, precision, recall, f_score))
+                # logging.info('Testing: ' + test_scores)
+
                 test_scores, acc, precision, recall, f_score = eval(
                     test_flattened,
                     [[idx2ner[p] for p in pred] for pred in test_preds]
@@ -313,26 +333,20 @@ if __name__ == "__main__":
                 logging.info('Test acc: %.2f, precision: %.2f, recall: %.2f, f_score: %.2f' % (acc, precision, recall, f_score))
                 logging.info('Testing: ' + test_scores)
 
-                test_perf = (acc, precision, recall, f_score)
+                test_perf = (acc, precision, recall, f_score, t)
 
-                if val_f_score > best_val:
-                    best_val = val_f_score
-                    best_val_perf = val_perf
+                if val_f_score > best_score:
+                    best_score = val_f_score
                     best_test_perf = test_perf
                     epochs_since_best = 0
-                    #TODO: save model to disk
                     save_path = model.save_session('tmp/model.ckpt')
                     logger.info("Model saved in path: %s" % save_path)
                 else:
                     epochs_since_best += 1
-                    if epochs_since_best > 3:
+                    if epochs_since_best > 30:
                         logger.info('No improvements after 4 epochs. Quitting now..')
                         sess.close()
                         quit()
-                    
-
 
                 logger.info('-----------------------')
-
-        logger.info('Best validation acc: %.2f, precision: %.2f, recall: %.2f, f_score: %.2f' % (best_val_perf))
-        logger.info('Best test acc: %.2f, precision: %.2f, recall: %.2f, f_score: %.2f' % (best_test_perf))
+                logger.info('Best test acc: %.2f, precision: %.2f, recall: %.2f, f_score: %.2f, epoch: %d' % (best_test_perf))

@@ -7,9 +7,6 @@ import string
 import json
 from copy import copy
 import numpy as np
-import spacy
-
-nlp = spacy.load('en')
 
 def load_task(in_file, POS=False):
     with open(in_file) as f:
@@ -55,10 +52,12 @@ def extract_features_from_utterance(POS, turn_type, turn, turn_ratio):
                          'turn_ratio': turn_ratio,
                          'turn_acts': turn_acts}
     sentence.append(('<START>', 'O', sentence_features))
-    pos_tags = turn[turn_type + '_pos']
+    if POS:
+        pos_tags = turn[turn_type + '_pos']
     for j, word in enumerate(turn[utterance_key]['tokens']):
         features = {}
-        features['pos_tag'] = pos_tags[j]
+        if POS:
+            features['pos_tag'] = pos_tags[j]
         sentence.append((word, tags[j], features))
     return sentence
 
@@ -335,6 +334,21 @@ class SelectSlotFeature(AbstractFeature):
     def feature_size(self):
         return 1
 
+# TODO: Caveat: only matches single word regexes!
+class RegexFeature(AbstractFeature):
+    def __init__(self, regexes):
+        self._regexes = regexes
+    def generate_feature(self, word, features):
+        rvalue = [0] * len(self._regexes)
+        for i, regex in enumerate(self._regexes):
+            match = re.search(regex, word)
+            if match is not None:
+                rvalue[i] = 1
+        return rvalue
+    def feature_size(self):
+        return len(self._regexes)
+
+
 def vectorize_lexical_features(data, sentence_size, memory_size, targets):
     feature_list = []
     mx_char_digit_feature = MixCharDigitFeature()
@@ -352,13 +366,13 @@ def vectorize_lexical_features(data, sentence_size, memory_size, targets):
         non_letter_feature,
         turntype_feature,
         turnratio_feature,
-        pos_verb_feature,
-        pos_symbol_feature,
-        pos_punctuation_feature,
+        #pos_verb_feature,
+        #pos_symbol_feature,
+        #pos_punctuation_feature,
         select_slot_feature
     ]
     act_slot_features = [SpeechActSlotFeature(targets, act) for act in ['REQUEST', 'SELECT', 'CONFIRM', 'OFFER']]
-    multidim_feature_list = act_slot_features + [SpeechActFeature()]
+    multidim_feature_list = act_slot_features + [SpeechActFeature()] + [RegexFeature([r'[ap]m', r'\d'])]
     lexical_feature_size = sum([f.feature_size() for f in feature_list + multidim_feature_list])
     nb_sentence = map(len, data)
     nb_sentences = sum(nb_sentence)
