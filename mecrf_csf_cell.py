@@ -21,7 +21,7 @@ import tensorflow
 from tensorflow.contrib.rnn import LSTMStateTuple
 from tensorflow.contrib.rnn import RNNCell
 
-class MemoryNetworkNERCell(RNNCell):
+class MemoryNetworkCSFCell(RNNCell):
     
     def __init__(self, max_seq_len, emb_size, M, C, return_link=True):
 

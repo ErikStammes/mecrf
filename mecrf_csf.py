@@ -11,7 +11,7 @@ import logging
 import sys
 import time
 
-from mecrf_ner_cell import MemoryNetworkNERCell
+from mecrf_csf_cell import MemoryNetworkCSFCell
 
 def zero_nil_slot(t, name=None):
     """
@@ -345,7 +345,7 @@ class MECRF(object):
                 # [None, memory_size, emb_size]
             sent_emb = sent_rnn_output
 
-            mem_rnn_cell = MemoryNetworkNERCell(
+            mem_rnn_cell = MemoryNetworkCSFCell(
                 self._memory_size,
                 self._embedding_feature_size,
                 m,

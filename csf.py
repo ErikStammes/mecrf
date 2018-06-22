@@ -6,8 +6,8 @@ import sys
 import operator
 import re
 
-from data_utils_ner import *
-from mecrf_ner import *
+from data_utils_csf import *
+from mecrf_csf import *
 from itertools import chain
 from six.moves import range, reduce
 
@@ -27,52 +27,44 @@ tf.flags.DEFINE_float("max_grad_norm", 5.0, "Clip gradients to this norm.")
 tf.flags.DEFINE_integer("evaluation_interval", 10, "Evaluate and print results every x epochs")
 tf.flags.DEFINE_integer("batch_size", 32, "Batch size for training.")
 tf.flags.DEFINE_integer("epochs", 100, "Number of epochs to train for.")
-tf.flags.DEFINE_integer("embedding_size", 20, "Embedding size for embedding matrices.") # small?
-tf.flags.DEFINE_integer("memory_size", 500, "Maximum size of memory.") #dimensions (?)
+tf.flags.DEFINE_integer("memory_size", 500, "Maximum size of memory.")
 tf.flags.DEFINE_integer("random_state", 101, "Random state.")
 tf.flags.DEFINE_string("data_dir", "data/conll03-ner/", "Directory containing CoNLL-03-NER data")
 tf.flags.DEFINE_integer("rnn_hidden_size", 20, "RNN hidden size [20]")
 tf.flags.DEFINE_string("embedding_file", None, "Pre-trained word embedding file path [None]")
 tf.flags.DEFINE_boolean("update_embeddings", False, "Update embeddings [False]")
 tf.flags.DEFINE_boolean("bilinear", False, "Use bilinear [False]")
-tf.flags.DEFINE_float("keep_prob", 1.0, "Keep prob [1.0]") # try 0.8 (from paper)
-tf.flags.DEFINE_integer("mlp_hidden_size", 64, "MLP hidden state size [64]") # small
+tf.flags.DEFINE_float("keep_prob", 1.0, "Keep prob [1.0]")
+tf.flags.DEFINE_integer("mlp_hidden_size", 64, "MLP hidden state size [64]")
 tf.flags.DEFINE_integer("rnn_memory_hidden_size", 0, "RNN memory hidden size [0]")
-tf.flags.DEFINE_string("nonlin", "tanh", "Non-linearity [tanh]") # try relu
+tf.flags.DEFINE_string("nonlin", "tanh", "Non-linearity [tanh]")
 tf.flags.DEFINE_string("dataset_size", None, "Dataset size (same as filename)")
 
 FLAGS = tf.flags.FLAGS
 
-def get_ner_dict(data):
-    ner2idx = {}
+def get_label_dict(data):
+    label2idx = {}
     for document in data:
         for sentence in document:
-            for _, ner, _ in sentence:
-                if ner not in ner2idx:
-                    ner2idx[ner] = len(ner2idx)
-    return ner2idx
+            for _, label, _ in sentence:
+                if label not in label2idx:
+                    label2idx[label] = len(label2idx)
+    return label2idx
 
 def load_embeddings(data, in_file, binary=False):
-    # emb = word2vec.Word2Vec.load_word2vec_format(in_file, binary=binary)
     emb = {}
     unk = []
     with open(in_file) as in_f:
-        #nb_words, nb_dim = None, None
         for line in in_f:
             line = line.strip()
             attrs = line.split(' ')
             if len(attrs) == 2:
-                #nb_words = int(attrs[0])
-                #nb_dim = int(attrs[1])
-                # self._embeddings = np.zeros((nb_words + 2, nb_dim), dtype=np.float32)
                 continue
             word = attrs[0]
             word_emb = map(float, attrs[1:])
             emb[word] = word_emb
             unk.append(word_emb)
     unk = np.mean(np.array(unk), axis=0)
-    #unk = emb['UNKNOWN']
-    # print(len(emb))
     ret_emb = []
     ret_emb.append(np.zeros(len(unk))) # padding
     ret_emb.append(unk)
@@ -170,7 +162,7 @@ if __name__ == "__main__":
         FLAGS.embedding_file
     )
     idx2word = dict(zip(word2idx.values(), word2idx.keys()))
-    FLAGS.embedding_size = embedding_mat.shape[1]
+    embedding_size = embedding_mat.shape[1]
     
     logger.info('Embedding_mat size: ' + str(embedding_mat.shape))
 
@@ -182,27 +174,27 @@ if __name__ == "__main__":
     
     memory_size = min(FLAGS.memory_size, max_story_size)
     
-    ner2idx = get_ner_dict(data)
-    idx2ner = dict(zip(ner2idx.values(), ner2idx.keys()))
+    label2idx = get_label_dict(data)
+    idx2label = dict(zip(label2idx.values(), label2idx.keys()))
     
     vocab_size = embedding_mat.shape[0]
 
-    answer_size = len(ner2idx)
+    answer_size = len(label2idx)
     
     logger.info("Longest sentence length %d" % sentence_size)
     logger.info("Longest story length %d" % max_story_size)
     logger.info("Average story length %d" % mean_story_size)
     
     # train/validation/test sets
-    train_sentences, train_memories, train_answers, train_mem_idx = vectorize_data(train, word2idx, sentence_size, memory_size, ner2idx)
-    val_sentences, val_memories, val_answers, val_mem_idx = vectorize_data(val, word2idx, sentence_size, memory_size, ner2idx)
-    test_sentences, test_memories, test_answers, test_mem_idx = vectorize_data(test, word2idx, sentence_size, memory_size, ner2idx)
+    train_sentences, train_memories, train_answers, train_mem_idx = vectorize_data(train, word2idx, sentence_size, memory_size, label2idx)
+    val_sentences, val_memories, val_answers, val_mem_idx = vectorize_data(val, word2idx, sentence_size, memory_size, label2idx)
+    test_sentences, test_memories, test_answers, test_mem_idx = vectorize_data(test, word2idx, sentence_size, memory_size, label2idx)
     
-    slot_values = np.unique([iob_tag[2:] for iob_tag in ner2idx.keys() if iob_tag != 'O'])
+    slot_keys = np.unique([iob_tag[2:] for iob_tag in label2idx.keys() if iob_tag != 'O'])
 
-    train_sentence_lexical_features, train_memory_lexical_features = vectorize_lexical_features(train, sentence_size, memory_size, slot_values)
-    val_sentence_lexical_features, val_memory_lexical_features = vectorize_lexical_features(val, sentence_size, memory_size, slot_values)
-    test_sentence_lexical_features, test_memory_lexical_features = vectorize_lexical_features(test, sentence_size, memory_size, slot_values)
+    train_sentence_lexical_features, train_memory_lexical_features = vectorize_lexical_features(train, sentence_size, memory_size, slot_keys)
+    val_sentence_lexical_features, val_memory_lexical_features = vectorize_lexical_features(val, sentence_size, memory_size, slot_keys)
+    test_sentence_lexical_features, test_memory_lexical_features = vectorize_lexical_features(test, sentence_size, memory_size, slot_keys)
 
     lexical_features_size = train_sentence_lexical_features.shape[2]
 
@@ -219,9 +211,6 @@ if __name__ == "__main__":
     
     tf.set_random_seed(FLAGS.random_state)
     batch_size = FLAGS.batch_size
-    
-    global_step = None
-    optimizer = None
     
     optimizer = tf.train.AdamOptimizer(learning_rate=FLAGS.learning_rate, epsilon=FLAGS.epsilon)
     
@@ -253,7 +242,7 @@ if __name__ == "__main__":
             answer_size,
             sentence_size,
             memory_size,
-            FLAGS.embedding_size,
+            embedding_size,
             session=sess,
             max_grad_norm=FLAGS.max_grad_norm,
             optimizer=optimizer,
@@ -297,7 +286,7 @@ if __name__ == "__main__":
     
                 train_scores, acc, precision, recall, f_score = eval(
                     train_flattened,
-                    [[idx2ner[p] for p in pred] for pred in train_preds]
+                    [[idx2label[p] for p in pred] for pred in train_preds]
                 )
                 
                 logger.info('-----------------------')
@@ -309,7 +298,7 @@ if __name__ == "__main__":
                 val_preds = model.predict(val_memories, val_sentences, val_mem_idx, val_sentence_lexical_features, val_memory_lexical_features)
                 val_scores, acc, precision, recall, f_score = eval(
                     val_flattened,
-                    [[idx2ner[p] for p in pred] for pred in val_preds]
+                    [[idx2label[p] for p in pred] for pred in val_preds]
                 )
                 logging.info('Validation acc: %.2f, precision: %.2f, recall: %.2f, f_score: %.2f' % (acc, precision, recall, f_score))
                 logging.info('Validation: ' + val_scores)
@@ -320,7 +309,7 @@ if __name__ == "__main__":
                 test_preds = model.predict(test_memories, test_sentences, test_mem_idx, test_sentence_lexical_features, test_memory_lexical_features)
                 # test_scores, acc, precision, recall, f_score = eval(
                 #     test_flattened,
-                #     [[idx2ner[p] for p in pred] for pred in test_preds],
+                #     [[idx2label[p] for p in pred] for pred in test_preds],
                 #     False
                 # )
                 # logging.info('Test without system utterances acc: %.2f, precision: %.2f, recall: %.2f, f_score: %.2f' % (acc, precision, recall, f_score))
@@ -328,7 +317,7 @@ if __name__ == "__main__":
 
                 test_scores, acc, precision, recall, f_score = eval(
                     test_flattened,
-                    [[idx2ner[p] for p in pred] for pred in test_preds]
+                    [[idx2label[p] for p in pred] for pred in test_preds]
                 )
                 logging.info('Test acc: %.2f, precision: %.2f, recall: %.2f, f_score: %.2f' % (acc, precision, recall, f_score))
                 logging.info('Testing: ' + test_scores)
