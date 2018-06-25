@@ -4,7 +4,6 @@ from __future__ import print_function
 import os
 import sys
 import operator
-import re
 import pickle
 
 from data_utils_csf import *
@@ -17,7 +16,6 @@ import numpy as np
 import cPickle as pickle
 
 import logging
-import uuid
 import gc
 
 from _collections import defaultdict
@@ -28,7 +26,8 @@ tf.flags.DEFINE_float("max_grad_norm", 5.0, "Clip gradients to this norm.")
 tf.flags.DEFINE_integer("evaluation_interval", 10, "Evaluate and print results every x epochs")
 tf.flags.DEFINE_integer("batch_size", 32, "Batch size for training.")
 tf.flags.DEFINE_integer("epochs", 100, "Number of epochs to train for.")
-tf.flags.DEFINE_integer("memory_size", 500, "Maximum size of memory.")
+tf.flags.DEFINE_integer("memory_size", 250, "Maximum size of memory.")
+tf.flags.DEFINE_integer("max_sentence_size", 50, "Maximum size of sentence.")
 tf.flags.DEFINE_integer("random_state", 101, "Random state.")
 tf.flags.DEFINE_string("data_dir", "data/conll03-ner/", "Directory containing CoNLL-03-NER data")
 tf.flags.DEFINE_integer("rnn_hidden_size", 20, "RNN hidden size [20]")
@@ -40,6 +39,7 @@ tf.flags.DEFINE_integer("mlp_hidden_size", 64, "MLP hidden state size [64]")
 tf.flags.DEFINE_integer("rnn_memory_hidden_size", 0, "RNN memory hidden size [0]")
 tf.flags.DEFINE_string("nonlin", "tanh", "Non-linearity [tanh]")
 tf.flags.DEFINE_string("dataset_size", None, "Dataset size (same as filename)")
+tf.flags.DEFINE_integer("epochs_without_improvement", 20, "Quit after this number of epochs without improvement")
 
 FLAGS = tf.flags.FLAGS
 
@@ -86,42 +86,6 @@ def load_embeddings(data, in_file, binary=False, load_full_vocab=False):
                     ret_word2idx[word] = 1 # unk
     return np.asarray(ret_emb, dtype=np.float32), ret_word2idx
 
-def output_conll(Gold, Pred, out_F, eval_sys):
-    with open(out_F, 'w+') as f:
-        assert len(Gold) == len(Pred)
-        for gold, pred in zip(Gold, Pred):
-            if not eval_sys and gold[0][2]['turn_type'] != 'user':
-                continue
-            assert len(gold) == len(pred)
-            for g, p in zip(gold, pred):
-                f.write(' '.join([g[0], g[1], p]))
-                f.write('\n')
-            f.write('\n')
-
-regex_pattern = r'accuracy:\s+([\d]+\.[\d]+)%; precision:\s+([\d]+\.[\d]+)%; recall:\s+([\d]+\.[\d]+)%; FB1:\s+([\d]+\.[\d]+)'
-def eval(gold, pred, eval_sys=True):
-    out_filename = str(uuid.uuid4())
-    cur_dir = os.path.dirname(__file__)
-    out_abs_filepath = os.path.abspath(os.path.join(cur_dir, 'output', out_filename))
-    try:
-        output_conll(gold, pred, out_abs_filepath, eval_sys)
-        cmd_process = os.popen(
-            "perl " + os.path.abspath(os.path.join(cur_dir, "conlleval.pl")) + " < " + out_abs_filepath)
-        cmd_ret = cmd_process.read()
-        cmd_ret_str = str(cmd_ret)
-        m = re.search(regex_pattern, cmd_ret)
-        assert m is not None
-        acc = float(m.group(1))
-        precision = float(m.group(2))
-        recall = float(m.group(3))
-        f_score = float(m.group(4))
-        return cmd_ret_str, acc, precision, recall, f_score
-    except:
-        return '', 0., 0., 0., 0.
-    finally:
-        # pass
-        os.remove(out_abs_filepath)
-
 if __name__ == "__main__":
     logger = logging.getLogger()
     logger.setLevel(logging.DEBUG)
@@ -151,11 +115,6 @@ if __name__ == "__main__":
         POS=False
     )
     val_flattened = [s for d in val for s in d]
-    # test = load_task(
-    #     os.path.join(FLAGS.data_dir, test_name),
-    #     POS=False
-    # )
-    # test_flattened = [s for d in test for s in d]
     
     data = train + val #+ test
     data = np.asarray(data, dtype=np.object)
@@ -177,9 +136,8 @@ if __name__ == "__main__":
     
     max_story_size = max([sum([len(s) for s in d]) for d in data])
     mean_story_size = int(np.mean([sum([len(s) for s in d]) for d in data]))
-    max_sentence_size = 500#max(map(len, chain.from_iterable(d for d in data))) + 100 
-    
-    memory_size = min(FLAGS.memory_size, max_story_size)
+    max_sentence_size = FLAGS.max_sentence_size
+    memory_size = FLAGS.memory_size
     
     label2idx = get_label_dict(data)
     idx2label = dict(zip(label2idx.values(), label2idx.keys()))
@@ -200,13 +158,11 @@ if __name__ == "__main__":
     # train/validation/test sets
     train_sentences, train_memories, train_answers, train_mem_idx = vectorize_data(train, word2idx, max_sentence_size, memory_size, label2idx)
     val_sentences, val_memories, val_answers, val_mem_idx = vectorize_data(val, word2idx, max_sentence_size, memory_size, label2idx)
-    #test_sentences, test_memories, test_answers, test_mem_idx = vectorize_data(test, word2idx, max_sentence_size, memory_size, label2idx)
     
     slot_keys = np.unique([iob_tag[2:] for iob_tag in label2idx.keys() if iob_tag != 'O'])
 
     train_sentence_lexical_features, train_memory_lexical_features = vectorize_lexical_features(train, max_sentence_size, memory_size, slot_keys)
     val_sentence_lexical_features, val_memory_lexical_features = vectorize_lexical_features(val, max_sentence_size, memory_size, slot_keys)
-    #test_sentence_lexical_features, test_memory_lexical_features = vectorize_lexical_features(test, max_sentence_size, memory_size, slot_keys)
 
     lexical_features_size = train_sentence_lexical_features.shape[2]
 
@@ -214,12 +170,10 @@ if __name__ == "__main__":
     logger.info("Training set text shape " + str(train_memories.shape))
     
     n_train = train_sentences.shape[0]
-    #n_test = test_sentences.shape[0]
     n_val = val_sentences.shape[0]
     
     logger.info("Training Size %d" % n_train)
     logger.info("Validation Size %d" % n_val)
-    #logger.info("Testing Size %d" % n_test)
     
     tf.set_random_seed(FLAGS.random_state)
     batch_size = FLAGS.batch_size
@@ -238,7 +192,7 @@ if __name__ == "__main__":
         raise
     
     best_score = -1
-    best_test_perf = None
+    best_perf = None
 
     session_conf = tf.ConfigProto(
         intra_op_parallelism_threads=4,
@@ -289,14 +243,13 @@ if __name__ == "__main__":
                     m = train_memories[start:end]
                     s = train_sentences[start:end]
                     a = train_answers[start:end]
-                    # temporal = get_temporal_encoding(m, random_time=0.0)
                     mi = train_mem_idx[start:end]
                     slf = train_sentence_lexical_features[start:end]
                     mlf = train_memory_lexical_features[start:end]
                     pred = model.predict(m, s, mi, slf, mlf)
                     train_preds += list(pred)
     
-                train_scores, acc, precision, recall, f_score = eval(
+                train_scores, acc, precision, recall, f_score = evaluate(
                     train_flattened,
                     [[idx2label[p] for p in pred] for pred in train_preds]
                 )
@@ -308,7 +261,7 @@ if __name__ == "__main__":
                 logging.info('Training: ' + train_scores)
     
                 val_preds = model.predict(val_memories, val_sentences, val_mem_idx, val_sentence_lexical_features, val_memory_lexical_features)
-                val_scores, acc, precision, recall, f_score = eval(
+                val_scores, acc, precision, recall, f_score = evaluate(
                     val_flattened,
                     [[idx2label[p] for p in pred] for pred in val_preds]
                 )
@@ -316,38 +269,20 @@ if __name__ == "__main__":
                 logging.info('Validation: ' + val_scores)
                 
                 val_f_score = f_score
-                val_perf = (acc, precision, recall, f_score)
-
-                #test_preds = model.predict(test_memories, test_sentences, test_mem_idx, test_sentence_lexical_features, test_memory_lexical_features)
-                # test_scores, acc, precision, recall, f_score = eval(
-                #     test_flattened,
-                #     [[idx2label[p] for p in pred] for pred in test_preds],
-                #     False
-                # )
-                # logging.info('Test without system utterances acc: %.2f, precision: %.2f, recall: %.2f, f_score: %.2f' % (acc, precision, recall, f_score))
-                # logging.info('Testing: ' + test_scores)
-
-                #test_scores, acc, precision, recall, f_score = eval(
-                #    test_flattened,
-                #    [[idx2label[p] for p in pred] for pred in test_preds]
-                #)
-                #logging.info('Test acc: %.2f, precision: %.2f, recall: %.2f, f_score: %.2f' % (acc, precision, recall, f_score))
-                #logging.info('Testing: ' + test_scores)
-
-                #test_perf = (acc, precision, recall, f_score, t)
+                val_perf = (acc, precision, recall, f_score, t)
 
                 if val_f_score > best_score:
                     best_score = val_f_score
-                    #best_test_perf = test_perf
+                    best_perf = val_perf
                     epochs_since_best = 0
                     save_path = model.save_session('tmp/model')
                     logger.info("Model saved in path: %s" % save_path)
                 else:
                     epochs_since_best += 1
-                    if epochs_since_best > 30:
-                        logger.info('No improvements after 4 epochs. Quitting now..')
+                    if epochs_since_best > FLAGS.epochs_without_improvement:
+                        logger.info('No improvements after %s epochs. Quitting now..' % FLAGS.epochs_without_improvement)
                         sess.close()
                         quit()
 
                 logger.info('-----------------------')
-                #logger.info('Best test acc: %.2f, precision: %.2f, recall: %.2f, f_score: %.2f, epoch: %d' % (best_test_perf))
+                logger.info('Best val acc: %.2f, precision: %.2f, recall: %.2f, f_score: %.2f, epoch: %d' % (best_perf))

@@ -2,68 +2,23 @@ import os
 import re
 import uuid
 import pickle
+import logging
 
 import tensorflow as tf
 import numpy as np
 
-from data_utils_csf import vectorize_data, vectorize_lexical_features, load_task
-from itertools import chain
+from data_utils_csf import vectorize_data, vectorize_lexical_features, load_task, evaluate
 from six.moves import range
 
-''' TODO: use flags for:
-- model location
-- test file location
-- embedding file location
-- memory size (or get it from restoration?)
-- max sentence size
-'''
-
-# TODO: move this to data_utils_csf.py?
-def output_conll(Gold, Pred, out_F, eval_sys):
-    with open(out_F, 'w+') as f:
-        assert len(Gold) == len(Pred)
-        for gold, pred in zip(Gold, Pred):
-            if not eval_sys and gold[0][2]['turn_type'] != 'user':
-                continue
-            assert len(gold) == len(pred)
-            for g, p in zip(gold, pred):
-                f.write(' '.join([g[0], g[1], p]))
-                f.write('\n')
-            f.write('\n')    
-
-regex_pattern = r'accuracy:\s+([\d]+\.[\d]+)%; precision:\s+([\d]+\.[\d]+)%; recall:\s+([\d]+\.[\d]+)%; FB1:\s+([\d]+\.[\d]+)'
-def eval(gold, pred, eval_sys=True):
-    out_filename = str(uuid.uuid4())
-    cur_dir = os.path.dirname(__file__)
-    out_abs_filepath = os.path.abspath(os.path.join(cur_dir, 'output', out_filename))
-    try:
-        output_conll(gold, pred, out_abs_filepath, eval_sys)
-        cmd_process = os.popen(
-            "perl " + os.path.abspath(os.path.join(cur_dir, "conlleval.pl")) + " < " + out_abs_filepath)
-        cmd_ret = cmd_process.read()
-        cmd_ret_str = str(cmd_ret)
-        m = re.search(regex_pattern, cmd_ret)
-        assert m is not None
-        acc = float(m.group(1))
-        precision = float(m.group(2))
-        recall = float(m.group(3))
-        f_score = float(m.group(4))
-        return cmd_ret_str, acc, precision, recall, f_score
-    except:
-        return '', 0., 0., 0., 0.
-    finally:
-        # pass
-        os.remove(out_abs_filepath)    
+tf.flags.DEFINE_string("model_loc", "tmp/model", "Location where model can be restored from")
+tf.flags.DEFINE_string("test_set", "data/slots/sim-R/test.json", "Test set location")
+tf.flags.DEFINE_integer("batch_size", 32, "Batch size")
+tf.flags.DEFINE_integer("memory_size", 250, "Maximum size of memory")
+tf.flags.DEFINE_integer("max_sentence_size", 50, "Maximum sentence size")
+tf.flags.DEFINE_integer("n_dialogues", -1, "Use the first n dialogues for evaluation only for quick prototyping, if below zero all dialogues are used")
+FLAGS = tf.flags.FLAGS
 
 def get_mini_batch_start_end(n_train, batch_size=None):
-    '''
-    Args:
-        n_train: int, number of training instances
-        batch_size: int (or None if full batch)
-    
-    Returns:
-        batches: list of tuples of (start, end) of each mini batch
-    '''
     mini_batch_size = n_train if batch_size is None else batch_size
     batches = zip(
         range(0, n_train, mini_batch_size),
@@ -72,30 +27,46 @@ def get_mini_batch_start_end(n_train, batch_size=None):
     return batches        
 
 def main():
-    #TODO divide this in functions
-    test = load_task('data/slots/sim-R/test.json')
+    # Set logger
+    logger = logging.getLogger()
+    logger.setLevel(logging.DEBUG)
+    ch = logging.StreamHandler()
+    ch.setLevel(logging.DEBUG)
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    ch.setFormatter(formatter)
+    logger.addHandler(ch)
+
+    # Load test dataset
+    test = load_task(FLAGS.test_set)
+    if FLAGS.n_dialogues > 0:
+        test = test[:FLAGS.n_dialogues]
     test_flattened = [s for d in test for s in d]
-    max_sentence_size = 500
-    max_story_size = max([sum([len(s) for s in d]) for d in test])
-    memory_size = min(500, max_story_size)
+    logger.info("Dataset loaded")
     
+    # Load vocabs/one-hot encoded dicts
     with open('tmp/vocabs.pkl', 'r') as f:
         (word2idx, label2idx, idx2label) = pickle.load(f)
-
+ 
     slot_keys = np.unique([iob_tag[2:] for iob_tag in label2idx.keys() if iob_tag != 'O'])        
 
-    sentences, memories, answers, mem_idx = vectorize_data(test, word2idx, max_sentence_size, memory_size, label2idx)    
-    sent_lexical_features, mem_lexical_features = vectorize_lexical_features(test, max_sentence_size, memory_size, slot_keys)
+    # Vectorize data and features
+    sentences, memories, _, mem_idx = vectorize_data(test, word2idx, FLAGS.max_sentence_size, FLAGS.memory_size, label2idx)    
+    sent_lexical_features, mem_lexical_features = vectorize_lexical_features(test, FLAGS.max_sentence_size, FLAGS.memory_size, slot_keys)
+    logger.info("Data vectorized")
 
     with tf.Session() as sess:
-        new_saver = tf.train.import_meta_graph('tmp/model.meta')
-        new_saver.restore(sess, 'tmp/model')
+        # Restore model from meta file and variable values from checkpoint file
+        new_saver = tf.train.import_meta_graph(FLAGS.model_loc + '.meta')
+        new_saver.restore(sess, FLAGS.model_loc)
+        logger.info("Model and session restored")
+
+        # Restore operations needed for prediction
         unary_scores_op = tf.get_collection('unary_scores_op')[0]
         transition_params_op = tf.get_collection('transition_params_op')[0]
         sent_lens = tf.get_collection('sent_lens')[0]
 
-        n_train = len(memories)
-        batches = get_mini_batch_start_end(n_train, 32)
+        # Divide in batches and get scores
+        batches = get_mini_batch_start_end(len(memories), FLAGS.batch_size)
         unary_scores, transition_params, sentence_lens = [], None, []
         for start, end in batches:
             feed_dict = {
@@ -119,7 +90,8 @@ def main():
                 us, transition_params
             )
             predictions.append(viterbi_sequence)
-        scores, acc, precision, recall, f_score = eval(test_flattened,
+        # Evaluate test set
+        scores, acc, precision, recall, f_score = evaluate(test_flattened,
                     [[idx2label[p] for p in pred] for pred in predictions]
                 )
         print('Test acc: %.2f, precision: %.2f, recall: %.2f, f_score: %.2f' % (acc, precision, recall, f_score))

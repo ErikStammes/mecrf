@@ -5,6 +5,7 @@ import os
 import re
 import string
 import json
+import uuid
 from copy import copy
 import numpy as np
 
@@ -102,6 +103,42 @@ def vectorize_data(data, word2idx, sentence_size, memory_size, ner2idx):
             ret_memories[idx_start + j, :len(memory)] = memory
 
     return ret_sentences, ret_memories, ret_answers, ret_mem_idx
+
+def output_conll(Gold, Pred, out_F, eval_sys):
+    with open(out_F, 'w+') as f:
+        assert len(Gold) == len(Pred)
+        for gold, pred in zip(Gold, Pred):
+            if not eval_sys and gold[0][2]['turn_type'] != 'user':
+                continue
+            assert len(gold) == len(pred)
+            for g, p in zip(gold, pred):
+                f.write(' '.join([g[0], g[1], p]))
+                f.write('\n')
+            f.write('\n')
+
+regex_pattern = r'accuracy:\s+([\d]+\.[\d]+)%; precision:\s+([\d]+\.[\d]+)%; recall:\s+([\d]+\.[\d]+)%; FB1:\s+([\d]+\.[\d]+)'
+def evaluate(gold, pred, eval_sys=True):
+    out_filename = str(uuid.uuid4())
+    cur_dir = os.path.dirname(__file__)
+    out_abs_filepath = os.path.abspath(os.path.join(cur_dir, 'output', out_filename))
+    try:
+        output_conll(gold, pred, out_abs_filepath, eval_sys)
+        cmd_process = os.popen(
+            "perl " + os.path.abspath(os.path.join(cur_dir, "conlleval.pl")) + " < " + out_abs_filepath)
+        cmd_ret = cmd_process.read()
+        cmd_ret_str = str(cmd_ret)
+        m = re.search(regex_pattern, cmd_ret)
+        assert m is not None
+        acc = float(m.group(1))
+        precision = float(m.group(2))
+        recall = float(m.group(3))
+        f_score = float(m.group(4))
+        return cmd_ret_str, acc, precision, recall, f_score
+    except:
+        return '', 0., 0., 0., 0.
+    finally:
+        # pass
+        os.remove(out_abs_filepath)    
 
 class AbstractFeature(object):
     def generate_feature(self, word, features):
