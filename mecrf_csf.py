@@ -137,6 +137,9 @@ class MECRF(object):
 
         init_op = tf.global_variables_initializer()
         self._saver = tf.train.Saver()
+        tf.add_to_collection('unary_scores_op', self._unary_scores_op)
+        tf.add_to_collection('transition_params_op', self._transition_params_op)
+        tf.add_to_collection('sent_lens', self._sent_lens)
         self._sess = session
         self._sess.run(init_op)
 
@@ -448,4 +451,3 @@ class MECRF(object):
 
     def save_session(self, loc):
         return self._saver.save(self._sess, loc)
-    

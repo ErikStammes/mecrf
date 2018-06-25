@@ -5,6 +5,7 @@ import os
 import sys
 import operator
 import re
+import pickle
 
 from data_utils_csf import *
 from mecrf_csf import *
@@ -51,7 +52,7 @@ def get_label_dict(data):
                     label2idx[label] = len(label2idx)
     return label2idx
 
-def load_embeddings(data, in_file, binary=False):
+def load_embeddings(data, in_file, binary=False, load_full_vocab=False):
     emb = {}
     unk = []
     with open(in_file) as in_f:
@@ -67,8 +68,13 @@ def load_embeddings(data, in_file, binary=False):
     unk = np.mean(np.array(unk), axis=0)
     ret_emb = []
     ret_emb.append(np.zeros(len(unk))) # padding
-    ret_emb.append(unk)
+    ret_emb.append(unk) # = 1 in ret_word2idx
     ret_word2idx = {}
+    if load_full_vocab:
+        for word in emb:
+            ret_word2idx[word] = len(ret_emb)
+            ret_emb.append(emb[word])
+        return np.asarray(ret_emb, dtype=np.float32), ret_word2idx
     for document in data:
         for sentence in document:
             for word, _, _ in sentence:
@@ -145,13 +151,13 @@ if __name__ == "__main__":
         POS=False
     )
     val_flattened = [s for d in val for s in d]
-    test = load_task(
-        os.path.join(FLAGS.data_dir, test_name),
-        POS=False
-    )
-    test_flattened = [s for d in test for s in d]
+    # test = load_task(
+    #     os.path.join(FLAGS.data_dir, test_name),
+    #     POS=False
+    # )
+    # test_flattened = [s for d in test for s in d]
     
-    data = train + val + test
+    data = train + val #+ test
     data = np.asarray(data, dtype=np.object)
 
     logger.info("Loaded data")
@@ -159,7 +165,8 @@ if __name__ == "__main__":
     assert FLAGS.embedding_file is not None
     embedding_mat, word2idx = load_embeddings(
         data, 
-        FLAGS.embedding_file
+        FLAGS.embedding_file,
+        load_full_vocab=True
     )
     idx2word = dict(zip(word2idx.values(), word2idx.keys()))
     embedding_size = embedding_mat.shape[1]
@@ -170,31 +177,36 @@ if __name__ == "__main__":
     
     max_story_size = max([sum([len(s) for s in d]) for d in data])
     mean_story_size = int(np.mean([sum([len(s) for s in d]) for d in data]))
-    sentence_size = max(map(len, chain.from_iterable(d for d in data)))
+    max_sentence_size = 500#max(map(len, chain.from_iterable(d for d in data))) + 100 
     
     memory_size = min(FLAGS.memory_size, max_story_size)
     
     label2idx = get_label_dict(data)
     idx2label = dict(zip(label2idx.values(), label2idx.keys()))
+
+    with open('tmp/vocabs.pkl', 'w') as f:
+        pickle.dump((word2idx, label2idx, idx2label), f)
     
     vocab_size = embedding_mat.shape[0]
 
+    logger.info("Vocabulary size: %d" % vocab_size)
+
     answer_size = len(label2idx)
     
-    logger.info("Longest sentence length %d" % sentence_size)
+    logger.info("Longest sentence length %d" % max_sentence_size)
     logger.info("Longest story length %d" % max_story_size)
     logger.info("Average story length %d" % mean_story_size)
     
     # train/validation/test sets
-    train_sentences, train_memories, train_answers, train_mem_idx = vectorize_data(train, word2idx, sentence_size, memory_size, label2idx)
-    val_sentences, val_memories, val_answers, val_mem_idx = vectorize_data(val, word2idx, sentence_size, memory_size, label2idx)
-    test_sentences, test_memories, test_answers, test_mem_idx = vectorize_data(test, word2idx, sentence_size, memory_size, label2idx)
+    train_sentences, train_memories, train_answers, train_mem_idx = vectorize_data(train, word2idx, max_sentence_size, memory_size, label2idx)
+    val_sentences, val_memories, val_answers, val_mem_idx = vectorize_data(val, word2idx, max_sentence_size, memory_size, label2idx)
+    #test_sentences, test_memories, test_answers, test_mem_idx = vectorize_data(test, word2idx, max_sentence_size, memory_size, label2idx)
     
     slot_keys = np.unique([iob_tag[2:] for iob_tag in label2idx.keys() if iob_tag != 'O'])
 
-    train_sentence_lexical_features, train_memory_lexical_features = vectorize_lexical_features(train, sentence_size, memory_size, slot_keys)
-    val_sentence_lexical_features, val_memory_lexical_features = vectorize_lexical_features(val, sentence_size, memory_size, slot_keys)
-    test_sentence_lexical_features, test_memory_lexical_features = vectorize_lexical_features(test, sentence_size, memory_size, slot_keys)
+    train_sentence_lexical_features, train_memory_lexical_features = vectorize_lexical_features(train, max_sentence_size, memory_size, slot_keys)
+    val_sentence_lexical_features, val_memory_lexical_features = vectorize_lexical_features(val, max_sentence_size, memory_size, slot_keys)
+    #test_sentence_lexical_features, test_memory_lexical_features = vectorize_lexical_features(test, max_sentence_size, memory_size, slot_keys)
 
     lexical_features_size = train_sentence_lexical_features.shape[2]
 
@@ -202,12 +214,12 @@ if __name__ == "__main__":
     logger.info("Training set text shape " + str(train_memories.shape))
     
     n_train = train_sentences.shape[0]
-    n_test = test_sentences.shape[0]
+    #n_test = test_sentences.shape[0]
     n_val = val_sentences.shape[0]
     
     logger.info("Training Size %d" % n_train)
     logger.info("Validation Size %d" % n_val)
-    logger.info("Testing Size %d" % n_test)
+    #logger.info("Testing Size %d" % n_test)
     
     tf.set_random_seed(FLAGS.random_state)
     batch_size = FLAGS.batch_size
@@ -240,7 +252,7 @@ if __name__ == "__main__":
             batch_size,
             vocab_size,
             answer_size,
-            sentence_size,
+            max_sentence_size,
             memory_size,
             embedding_size,
             session=sess,
@@ -306,7 +318,7 @@ if __name__ == "__main__":
                 val_f_score = f_score
                 val_perf = (acc, precision, recall, f_score)
 
-                test_preds = model.predict(test_memories, test_sentences, test_mem_idx, test_sentence_lexical_features, test_memory_lexical_features)
+                #test_preds = model.predict(test_memories, test_sentences, test_mem_idx, test_sentence_lexical_features, test_memory_lexical_features)
                 # test_scores, acc, precision, recall, f_score = eval(
                 #     test_flattened,
                 #     [[idx2label[p] for p in pred] for pred in test_preds],
@@ -315,20 +327,20 @@ if __name__ == "__main__":
                 # logging.info('Test without system utterances acc: %.2f, precision: %.2f, recall: %.2f, f_score: %.2f' % (acc, precision, recall, f_score))
                 # logging.info('Testing: ' + test_scores)
 
-                test_scores, acc, precision, recall, f_score = eval(
-                    test_flattened,
-                    [[idx2label[p] for p in pred] for pred in test_preds]
-                )
-                logging.info('Test acc: %.2f, precision: %.2f, recall: %.2f, f_score: %.2f' % (acc, precision, recall, f_score))
-                logging.info('Testing: ' + test_scores)
+                #test_scores, acc, precision, recall, f_score = eval(
+                #    test_flattened,
+                #    [[idx2label[p] for p in pred] for pred in test_preds]
+                #)
+                #logging.info('Test acc: %.2f, precision: %.2f, recall: %.2f, f_score: %.2f' % (acc, precision, recall, f_score))
+                #logging.info('Testing: ' + test_scores)
 
-                test_perf = (acc, precision, recall, f_score, t)
+                #test_perf = (acc, precision, recall, f_score, t)
 
                 if val_f_score > best_score:
                     best_score = val_f_score
-                    best_test_perf = test_perf
+                    #best_test_perf = test_perf
                     epochs_since_best = 0
-                    save_path = model.save_session('tmp/model.ckpt')
+                    save_path = model.save_session('tmp/model')
                     logger.info("Model saved in path: %s" % save_path)
                 else:
                     epochs_since_best += 1
@@ -338,4 +350,4 @@ if __name__ == "__main__":
                         quit()
 
                 logger.info('-----------------------')
-                logger.info('Best test acc: %.2f, precision: %.2f, recall: %.2f, f_score: %.2f, epoch: %d' % (best_test_perf))
+                #logger.info('Best test acc: %.2f, precision: %.2f, recall: %.2f, f_score: %.2f, epoch: %d' % (best_test_perf))
