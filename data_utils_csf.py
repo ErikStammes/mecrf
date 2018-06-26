@@ -9,7 +9,9 @@ import uuid
 from copy import copy
 import numpy as np
 
-def load_task(in_file, POS=False):
+def load_task(in_file, POS=False, direct_input=False):
+    if direct_input:
+        return parse_conversations(in_file, POS=POS)
     with open(in_file) as f:
         return parse_conversations(f.read(), POS=POS)
 
@@ -46,6 +48,8 @@ def extract_acts_from_turn(turn, act_key):
 def extract_features_from_utterance(POS, turn_type, turn, turn_ratio):
     utterance_key = turn_type + '_utterance'
     act_key = turn_type + '_acts'
+    if 'tokens' not in turn[utterance_key]:
+        turn[utterance_key]['tokens'] = turn[utterance_key]['text'].split()
     tags = extract_tags_from_slots(turn[utterance_key])
     sentence = []
     turn_acts = extract_acts_from_turn(turn, act_key)
