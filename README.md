@@ -1,9 +1,10 @@
 ### Contextual Slot Filling for Task-Oriented Conversational Agents
 
-Memory-enhanced CRF implementation for the slot filling problem for conversational agents. Uses dialogue acts in explicit feature extraction step. Requires the input to be in the same style as the [simulated dialogue](https://github.com/google-research-datasets/simulated-dialogue) dataset by Google.
+Memory-enhanced CRF implementation for the slot filling problem for conversational agents. Uses dialogue acts in explicit feature extraction step. Requires the input to be in the same style as the [simulated dialogue](https://github.com/google-research-datasets/simulated-dialogue) dataset by Google. 
 
-Original ME-CRF code by Liu et al. 
+This is the code I used for my bachelor thesis ([Contextual Slot Filling for Task-Oriented Conversational Agents](http://scriptiesonline.uba.uva.nl/en/scriptie/659240)). 
 
+[Original ME-CRF](https://github.com/liufly/mecrf) code by Liu et al. 
 
 Prerequisites:
 ```
